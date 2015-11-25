@@ -9,14 +9,15 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/aws/aws-sdk-go/service/elb"
 
 	consul "github.com/hashicorp/consul/api"
 	"github.com/hashicorp/serf/serf"
 )
 
 type options struct {
-	LoadBalancerName string `long:"elb" description:"name of ELB" required:"true"`
+	EC2Tag    string `long:"ec2-tag" description:"tag name on EC2 instances" required:"true"`
+	ConsulTag string `long:"consul-tag" description:"tag name on Consul agents" required:"true"`
+	Value     string `long:"value" description:"expected tag value" required:"true"`
 }
 
 func main() {
@@ -40,40 +41,25 @@ func newConsulAgent(config *consul.Config) (*consul.Agent, error) {
 
 type awsClient struct {
 	ec2 *ec2.EC2
-	elb *elb.ELB
 }
 
 func newAWSClient(cfgs ...*aws.Config) (*awsClient, error) {
 	session := session.New(cfgs...)
 	return &awsClient{
-		elb: elb.New(session),
 		ec2: ec2.New(session),
 	}, nil
 }
 
-func (awsClient *awsClient) listInServiceInstances(loadBalancerName string) ([]string, error) {
-	result, err := awsClient.elb.DescribeInstanceHealth(&elb.DescribeInstanceHealthInput{
-		LoadBalancerName: aws.String(loadBalancerName),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	var instanceIds []string
-	for _, instance := range result.InstanceStates {
-		if aws.StringValue(instance.State) == "InService" {
-			instanceIds = append(instanceIds, aws.StringValue(instance.InstanceId))
-		}
-	}
-
-	return instanceIds, nil
-}
-
-func (awsClient *awsClient) getInstancesByIds(instanceIds []string) ([]*ec2.Instance, error) {
+func (awsClient *awsClient) getInstancesWithTag(key string, value string) ([]*ec2.Instance, error) {
 	var instances []*ec2.Instance
 
 	err := awsClient.ec2.DescribeInstancesPages(&ec2.DescribeInstancesInput{
-		InstanceIds: aws.StringSlice(instanceIds),
+		Filters: []*ec2.Filter{
+			&ec2.Filter{
+				Name:   aws.String(fmt.Sprintf("tag:%s", key)),
+				Values: []*string{aws.String(value)},
+			},
+		},
 	}, func(result *ec2.DescribeInstancesOutput, _ bool) bool {
 		for _, reservation := range result.Reservations {
 			instances = append(instances, reservation.Instances...)
@@ -87,14 +73,48 @@ func (awsClient *awsClient) getInstancesByIds(instanceIds []string) ([]*ec2.Inst
 	return instances, nil
 }
 
-func findConsulMemberByIPAddress(members []*consul.AgentMember, ipAddress string) *consul.AgentMember {
-	for _, member := range members {
-		if member.Addr == ipAddress {
-			return member
+func getConsulMembersWithTag(consulAgent *consul.Agent, key string, value string) ([]*consul.AgentMember, error) {
+	allMembers, err := consulAgent.Members(false)
+	if err != nil {
+		return nil, err
+	}
+
+	var members []*consul.AgentMember
+	for _, member := range allMembers {
+		if serf.MemberStatus(member.Status) == serf.StatusAlive && member.Tags[key] == value {
+			members = append(members, member)
 		}
 	}
 
-	return nil
+	return members, nil
+}
+
+func diff(instances []*ec2.Instance, members []*consul.AgentMember) (missingInstances []*ec2.Instance, missingMembers []*consul.AgentMember) {
+	var instanceMap map[string]*ec2.Instance
+	var memberMap map[string]*consul.AgentMember
+
+	for _, instance := range instances {
+		instanceMap[aws.StringValue(instance.PrivateIpAddress)] = instance
+	}
+	for _, member := range members {
+		memberMap[member.Addr] = member
+	}
+
+	for addr, instance := range instanceMap {
+		_, ok := memberMap[addr]
+		if !ok {
+			missingInstances = append(missingInstances, instance)
+		}
+	}
+
+	for addr, member := range memberMap {
+		_, ok := instanceMap[addr]
+		if !ok {
+			missingMembers = append(missingMembers, member)
+		}
+	}
+
+	return
 }
 
 func (opts *options) run() *checkers.Checker {
@@ -108,33 +128,21 @@ func (opts *options) run() *checkers.Checker {
 		return checkers.Unknown(err.Error())
 	}
 
-	instanceIds, err := awsClient.listInServiceInstances(opts.LoadBalancerName)
+	ec2Instances, err := awsClient.getInstancesWithTag(opts.EC2Tag, opts.Value)
 	if err != nil {
 		return checkers.Unknown(err.Error())
 	}
 
-	expectedInstances, err := awsClient.getInstancesByIds(instanceIds)
+	consulMembers, err := getConsulMembersWithTag(consulAgent, opts.ConsulTag, opts.Value)
 	if err != nil {
 		return checkers.Unknown(err.Error())
 	}
 
-	members, err := consulAgent.Members(false)
-	if err != nil {
-		return checkers.Unknown(err.Error())
+	_, missingMembers := diff(ec2Instances, consulMembers)
+
+	if len(missingMembers) != 0 {
+		return checkers.Critical(fmt.Sprintf("Missing members: %v", missingMembers))
 	}
 
-	var missingInstances []*ec2.Instance
-	for _, expectedInstance := range expectedInstances {
-		member := findConsulMemberByIPAddress(members, aws.StringValue(expectedInstance.PrivateIpAddress))
-
-		if member == nil || serf.MemberStatus(member.Status) != serf.StatusAlive {
-			missingInstances = append(missingInstances, expectedInstance)
-		}
-	}
-
-	if len(missingInstances) == 0 {
-		return checkers.Ok("OK")
-	} else {
-		return checkers.Critical(fmt.Sprintf("Missing instances: %v", missingInstances))
-	}
+	return checkers.Ok("OK")
 }
