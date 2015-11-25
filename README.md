@@ -1,10 +1,10 @@
-# check-consul-member
+# check-consul-members
 
 Checks if every instance under a load balancer joins a Consul cluster.
 
 ## Synopsis
 ```sh
-check-consul-member --elb api
+check-consul-members --elb api
 ```
 
 ## Arguments
