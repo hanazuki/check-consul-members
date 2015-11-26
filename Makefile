@@ -1,4 +1,4 @@
-all: deps
+all: deps lint
 	go build -ldflags "-X main.VERSION=$$(git describe --tags --dirty 2> /dev/null) " ./...
 
 lint: dev-deps
