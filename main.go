@@ -49,7 +49,7 @@ func (opts *options) run() *checkers.Checker {
 	if len(missingMembers) != 0 {
 		var ipAddrs []string
 		for _, member := range missingMembers {
-			ipAddrs = append(ipAddrs, member.Address)
+			ipAddrs = append(ipAddrs, fmt.Sprintf("%s(%s)", member.Node, member.Address))
 		}
 
 		return checkers.Warning(fmt.Sprintf("%d instance(s) not properly tagged: %v", len(ipAddrs), ipAddrs))
