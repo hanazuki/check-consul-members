@@ -32,7 +32,7 @@ func main() {
 }
 
 func (opts *options) run() *checkers.Checker {
-	missingInstances, _, err := check(opts)
+	missingInstances, missingMembers, err := check(opts)
 	if err != nil {
 		return checkers.Unknown(err.Error())
 	}
@@ -43,7 +43,16 @@ func (opts *options) run() *checkers.Checker {
 			ipAddrs = append(ipAddrs, aws.StringValue(instance.PrivateIpAddress))
 		}
 
-		return checkers.Critical(fmt.Sprintf("Instances left from Consul cluster: %v", ipAddrs))
+		return checkers.Critical(fmt.Sprintf("%d instance(s) left from Consul cluster: %v", len(ipAddrs), ipAddrs))
+	}
+
+	if len(missingMembers) != 0 {
+		var ipAddrs []string
+		for _, member := range missingMembers {
+			ipAddrs = append(ipAddrs, member.Address)
+		}
+
+		return checkers.Warning(fmt.Sprintf("%d instance(s) not properly tagged: %v", len(ipAddrs), ipAddrs))
 	}
 
 	return checkers.Ok("OK")
