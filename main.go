@@ -31,6 +31,77 @@ func main() {
 	checker.Exit()
 }
 
+func (opts *options) run() *checkers.Checker {
+	missingInstances, _, err := check(opts)
+	if err != nil {
+		return checkers.Unknown(err.Error())
+	}
+
+	if len(missingInstances) != 0 {
+		var ipAddrs []string
+		for _, instance := range missingInstances {
+			ipAddrs = append(ipAddrs, aws.StringValue(instance.PrivateIpAddress))
+		}
+
+		return checkers.Critical(fmt.Sprintf("Missing members: %v", ipAddrs))
+	}
+
+	return checkers.Ok("OK")
+}
+
+func check(opts *options) (missingInstances []*ec2.Instance, missingMembers []*consul.AgentMember, err error) {
+	consulAgent, err := newConsulAgent(consul.DefaultConfig())
+	if err != nil {
+		return
+	}
+
+	ec2Client, err := newEC2Client()
+	if err != nil {
+		return
+	}
+
+	ec2Instances, err := getInstancesWithTag(ec2Client, opts.EC2Tag, opts.Value)
+	if err != nil {
+		return
+	}
+
+	consulMembers, err := getConsulMembersWithTag(consulAgent, opts.ConsulTag, opts.Value)
+	if err != nil {
+		return
+	}
+
+	missingInstances, missingMembers = diff(ec2Instances, consulMembers)
+	return missingInstances, missingMembers, nil
+}
+
+func diff(instances []*ec2.Instance, members []*consul.AgentMember) (missingInstances []*ec2.Instance, missingMembers []*consul.AgentMember) {
+	instanceMap := make(map[string]*ec2.Instance)
+	memberMap := make(map[string]*consul.AgentMember)
+
+	for _, instance := range instances {
+		instanceMap[aws.StringValue(instance.PrivateIpAddress)] = instance
+	}
+	for _, member := range members {
+		memberMap[member.Addr] = member
+	}
+
+	for addr, instance := range instanceMap {
+		_, ok := memberMap[addr]
+		if !ok {
+			missingInstances = append(missingInstances, instance)
+		}
+	}
+
+	for addr, member := range memberMap {
+		_, ok := instanceMap[addr]
+		if !ok {
+			missingMembers = append(missingMembers, member)
+		}
+	}
+
+	return
+}
+
 func newConsulAgent(config *consul.Config) (*consul.Agent, error) {
 	client, err := consul.NewClient(config)
 	if err != nil {
@@ -39,21 +110,15 @@ func newConsulAgent(config *consul.Config) (*consul.Agent, error) {
 	return client.Agent(), nil
 }
 
-type awsClient struct {
-	ec2 *ec2.EC2
-}
-
-func newAWSClient(cfgs ...*aws.Config) (*awsClient, error) {
+func newEC2Client(cfgs ...*aws.Config) (*ec2.EC2, error) {
 	session := session.New(cfgs...)
-	return &awsClient{
-		ec2: ec2.New(session),
-	}, nil
+	return ec2.New(session), nil
 }
 
-func (awsClient *awsClient) getInstancesWithTag(key string, value string) ([]*ec2.Instance, error) {
+func getInstancesWithTag(ec2Client *ec2.EC2, key string, value string) ([]*ec2.Instance, error) {
 	var instances []*ec2.Instance
 
-	err := awsClient.ec2.DescribeInstancesPages(&ec2.DescribeInstancesInput{
+	err := ec2Client.DescribeInstancesPages(&ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
 			&ec2.Filter{
 				Name:   aws.String(fmt.Sprintf("tag:%s", key)),
@@ -87,62 +152,4 @@ func getConsulMembersWithTag(consulAgent *consul.Agent, key string, value string
 	}
 
 	return members, nil
-}
-
-func diff(instances []*ec2.Instance, members []*consul.AgentMember) (missingInstances []*ec2.Instance, missingMembers []*consul.AgentMember) {
-	instanceMap := make(map[string]*ec2.Instance)
-	memberMap := make(map[string]*consul.AgentMember)
-
-	for _, instance := range instances {
-		instanceMap[aws.StringValue(instance.PrivateIpAddress)] = instance
-	}
-	for _, member := range members {
-		memberMap[member.Addr] = member
-	}
-
-	for addr, instance := range instanceMap {
-		_, ok := memberMap[addr]
-		if !ok {
-			missingInstances = append(missingInstances, instance)
-		}
-	}
-
-	for addr, member := range memberMap {
-		_, ok := instanceMap[addr]
-		if !ok {
-			missingMembers = append(missingMembers, member)
-		}
-	}
-
-	return
-}
-
-func (opts *options) run() *checkers.Checker {
-	consulAgent, err := newConsulAgent(consul.DefaultConfig())
-	if err != nil {
-		return checkers.Unknown(err.Error())
-	}
-
-	awsClient, err := newAWSClient()
-	if err != nil {
-		return checkers.Unknown(err.Error())
-	}
-
-	ec2Instances, err := awsClient.getInstancesWithTag(opts.EC2Tag, opts.Value)
-	if err != nil {
-		return checkers.Unknown(err.Error())
-	}
-
-	consulMembers, err := getConsulMembersWithTag(consulAgent, opts.ConsulTag, opts.Value)
-	if err != nil {
-		return checkers.Unknown(err.Error())
-	}
-
-	_, missingMembers := diff(ec2Instances, consulMembers)
-
-	if len(missingMembers) != 0 {
-		return checkers.Critical(fmt.Sprintf("Missing members: %v", missingMembers))
-	}
-
-	return checkers.Ok("OK")
 }
