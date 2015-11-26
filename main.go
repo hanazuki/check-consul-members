@@ -90,8 +90,8 @@ func getConsulMembersWithTag(consulAgent *consul.Agent, key string, value string
 }
 
 func diff(instances []*ec2.Instance, members []*consul.AgentMember) (missingInstances []*ec2.Instance, missingMembers []*consul.AgentMember) {
-	var instanceMap map[string]*ec2.Instance
-	var memberMap map[string]*consul.AgentMember
+	instanceMap := make(map[string]*ec2.Instance)
+	memberMap := make(map[string]*consul.AgentMember)
 
 	for _, instance := range instances {
 		instanceMap[aws.StringValue(instance.PrivateIpAddress)] = instance
