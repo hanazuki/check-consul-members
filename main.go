@@ -14,7 +14,8 @@ import (
 	consul "github.com/hashicorp/consul/api"
 )
 
-var VERSION string
+// Version identifies the version of this program. Populated by the linker.
+var Version string
 
 type options struct {
 	EC2TagKey        string `long:"ec2-tag" description:"tag name on EC2 instances" required:"true"`
@@ -27,7 +28,7 @@ type options struct {
 func main() {
 	opts := &options{
 		ShowVersion: func() {
-			fmt.Printf("%s\n", VERSION)
+			fmt.Printf("%s\n", Version)
 			os.Exit(0)
 		},
 	}
