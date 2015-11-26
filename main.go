@@ -11,13 +11,13 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 
 	consul "github.com/hashicorp/consul/api"
-	"github.com/hashicorp/serf/serf"
 )
 
 type options struct {
-	EC2Tag    string `long:"ec2-tag" description:"tag name on EC2 instances" required:"true"`
-	ConsulTag string `long:"consul-tag" description:"tag name on Consul agents" required:"true"`
-	Value     string `long:"value" description:"expected tag value" required:"true"`
+	EC2TagKey        string `long:"ec2-tag" description:"tag name on EC2 instances" required:"true"`
+	EC2TagValue      string `long:"ec2-value" description:"expected EC2 tag value" required:"true"`
+	ConsulService    string `long:"consul-service" description:"name of Consul service" required:"true"`
+	ConsulServiceTag string `long:"consul-tag" description:"tag name on Consul service"`
 }
 
 func main() {
@@ -43,46 +43,46 @@ func (opts *options) run() *checkers.Checker {
 			ipAddrs = append(ipAddrs, aws.StringValue(instance.PrivateIpAddress))
 		}
 
-		return checkers.Critical(fmt.Sprintf("Missing members: %v", ipAddrs))
+		return checkers.Critical(fmt.Sprintf("Instances left from Consul cluster: %v", ipAddrs))
 	}
 
 	return checkers.Ok("OK")
 }
 
-func check(opts *options) (missingInstances []*ec2.Instance, missingMembers []*consul.AgentMember, err error) {
-	consulAgent, err := newConsulAgent(consul.DefaultConfig())
+func check(opts *options) (missingInstances []*ec2.Instance, missingMembers []*consul.CatalogService, err error) {
+	consulClient, err := opts.newConsulClient()
 	if err != nil {
 		return
 	}
 
-	ec2Client, err := newEC2Client()
+	ec2Client, err := opts.newEC2Client()
 	if err != nil {
 		return
 	}
 
-	ec2Instances, err := getInstancesWithTag(ec2Client, opts.EC2Tag, opts.Value)
+	ec2Instances, err := getInstancesWithTag(ec2Client, opts.EC2TagKey, opts.EC2TagValue)
 	if err != nil {
 		return
 	}
 
-	consulMembers, err := getConsulMembersWithTag(consulAgent, opts.ConsulTag, opts.Value)
+	consulServices, err := getConsulServiceCatalog(consulClient, opts.ConsulService, opts.ConsulServiceTag)
 	if err != nil {
 		return
 	}
 
-	missingInstances, missingMembers = diff(ec2Instances, consulMembers)
+	missingInstances, missingMembers = diff(ec2Instances, consulServices)
 	return missingInstances, missingMembers, nil
 }
 
-func diff(instances []*ec2.Instance, members []*consul.AgentMember) (missingInstances []*ec2.Instance, missingMembers []*consul.AgentMember) {
+func diff(instances []*ec2.Instance, members []*consul.CatalogService) (missingInstances []*ec2.Instance, missingMembers []*consul.CatalogService) {
 	instanceMap := make(map[string]*ec2.Instance)
-	memberMap := make(map[string]*consul.AgentMember)
+	memberMap := make(map[string]*consul.CatalogService)
 
 	for _, instance := range instances {
 		instanceMap[aws.StringValue(instance.PrivateIpAddress)] = instance
 	}
 	for _, member := range members {
-		memberMap[member.Addr] = member
+		memberMap[member.Address] = member
 	}
 
 	for addr, instance := range instanceMap {
@@ -102,16 +102,12 @@ func diff(instances []*ec2.Instance, members []*consul.AgentMember) (missingInst
 	return
 }
 
-func newConsulAgent(config *consul.Config) (*consul.Agent, error) {
-	client, err := consul.NewClient(config)
-	if err != nil {
-		return nil, err
-	}
-	return client.Agent(), nil
+func (opts *options) newConsulClient() (*consul.Client, error) {
+	return consul.NewClient(consul.DefaultConfig())
 }
 
-func newEC2Client(cfgs ...*aws.Config) (*ec2.EC2, error) {
-	session := session.New(cfgs...)
+func (opts *options) newEC2Client() (*ec2.EC2, error) {
+	session := session.New()
 	return ec2.New(session), nil
 }
 
@@ -138,18 +134,7 @@ func getInstancesWithTag(ec2Client *ec2.EC2, key string, value string) ([]*ec2.I
 	return instances, nil
 }
 
-func getConsulMembersWithTag(consulAgent *consul.Agent, key string, value string) ([]*consul.AgentMember, error) {
-	allMembers, err := consulAgent.Members(false)
-	if err != nil {
-		return nil, err
-	}
-
-	var members []*consul.AgentMember
-	for _, member := range allMembers {
-		if serf.MemberStatus(member.Status) == serf.StatusAlive && member.Tags[key] == value {
-			members = append(members, member)
-		}
-	}
-
-	return members, nil
+func getConsulServiceCatalog(consulClient *consul.Client, name, tag string) ([]*consul.CatalogService, error) {
+	catalog, _, err := consulClient.Catalog().Service(name, tag, nil)
+	return catalog, err
 }
