@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/mackerelio/checkers"
@@ -13,18 +14,26 @@ import (
 	consul "github.com/hashicorp/consul/api"
 )
 
+var VERSION string
+
 type options struct {
 	EC2TagKey        string `long:"ec2-tag" description:"tag name on EC2 instances" required:"true"`
 	EC2TagValue      string `long:"ec2-value" description:"expected EC2 tag value" required:"true"`
 	ConsulService    string `long:"consul-service" description:"name of Consul service" required:"true"`
 	ConsulServiceTag string `long:"consul-tag" description:"tag name on Consul service"`
+	ShowVersion      func() `long:"version" description:"Show version and exit"`
 }
 
 func main() {
-	opts := &options{}
+	opts := &options{
+		ShowVersion: func() {
+			fmt.Printf("%s\n", VERSION)
+			os.Exit(0)
+		},
+	}
 	_, err := flags.Parse(opts)
 	if err != nil {
-		panic(err)
+		os.Exit(255)
 	}
 
 	checker := opts.run()
