@@ -1,4 +1,6 @@
-all: deps lint
+all: deps lint build
+
+build: dev-deps
 	go build -ldflags "-X main.Version=$$(git describe --tags --dirty 2> /dev/null) " ./...
 
 lint: dev-deps
@@ -17,4 +19,7 @@ deps:
 dev-deps:
 	go get github.com/golang/lint/golint
 
-.PHONY: all test lint clean deps dev-deps
+pkg: all
+	tar zcf check-consul-members_$$(go env GOOS)_$$(go env GOARCH).tgz check-consul-members
+
+.PHONY: all build test lint clean deps dev-deps pkg

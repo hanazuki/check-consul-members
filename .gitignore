@@ -1,3 +1,4 @@
 .envrc
 .golint.txt
 /check-consul-members
+*.tgz
