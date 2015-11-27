@@ -38,6 +38,7 @@ func main() {
 	}
 
 	checker := opts.run()
+	checker.Name = "Consul Members"
 	checker.Exit()
 }
 
