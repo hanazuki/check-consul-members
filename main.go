@@ -137,6 +137,10 @@ func getInstancesWithTag(ec2Client *ec2.EC2, key string, value string) ([]*ec2.I
 	err := ec2Client.DescribeInstancesPages(&ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
 			&ec2.Filter{
+				Name: aws.String("instance-state-name"),
+				Values: []*string{aws.String("running")},
+			},
+			&ec2.Filter{
 				Name:   aws.String(fmt.Sprintf("tag:%s", key)),
 				Values: []*string{aws.String(value)},
 			},
